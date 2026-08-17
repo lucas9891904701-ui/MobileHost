@@ -1,0 +1,11 @@
+<resources>
+    <color name="bg">#0D1117</color>
+    <color name="surface">#161B22</color>
+    <color name="primary">#00E676</color>
+    <color name="primary_dark">#00C853</color>
+    <color name="text_primary">#E6EDF3</color>
+    <color name="text_secondary">#8B949E</color>
+    <color name="online">#00E676</color>
+    <color name="offline">#FF5252</color>
+    <color name="console_bg">#010409</color>
+</resources>
