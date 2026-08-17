@@ -8,9 +8,7 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import java.io.BufferedReader
 import java.io.File
-import java.io.InputStreamReader
 
 /**
  * Foreground Service responsável por manter a "host" rodando em segundo
@@ -28,8 +26,13 @@ class HostService : Service() {
         const val API_PORT = 8080
     }
 
-    private var process: Process? = null
     private var httpServer: LocalHttpServer? = null
+
+    // Polling do console: como o comando roda dentro do Termux (outro app),
+    // lemos periodicamente o arquivo de log que ele vai preenchendo.
+    private var pollThread: Thread? = null
+    @Volatile private var polling = false
+    private var logPos = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -72,16 +75,29 @@ class HostService : Service() {
     }
 
     private fun stopProcessOnly() {
-        try { process?.destroy() } catch (e: Exception) { }
-        process = null
-        AppState.appendLog("[MobileHost] Processo parado.")
+        val pathStr = AppState.projectPath.value
+        if (pathStr != null && TermuxExecutor.isReady(this)) {
+            TermuxExecutor.stop(this, File(pathStr))
+        }
+        stopPolling()
+        AppState.appendLog("[MobileHost] Comando de parada enviado ao Termux.")
     }
 
     private fun startProcess() {
         val pathStr = AppState.projectPath.value ?: return
         val dir = File(pathStr)
-        val type = AppState.projectType.value ?: ProjectType.UNKNOWN
 
+        if (!TermuxExecutor.isTermuxInstalled(this)) {
+            AppState.appendLog("[MobileHost] ❌ Termux não está instalado. Instale o Termux (F-Droid) para executar hosts.")
+            return
+        }
+        if (!TermuxExecutor.hasRunCommandPermission(this)) {
+            AppState.appendLog("[MobileHost] ❌ Permissão RUN_COMMAND não concedida ao MobileHost. " +
+                "Abra o app e aceite a permissão do Termux quando solicitado.")
+            return
+        }
+
+        val type = AppState.projectType.value ?: ProjectType.UNKNOWN
         val cmd: List<String> = when (type) {
             ProjectType.NODE -> listOf("node", nodeEntry(dir))
             ProjectType.PYTHON -> listOf("python3", scriptEntry(dir, "main.py", "app.py"))
@@ -95,18 +111,33 @@ class HostService : Service() {
             }
         }
 
-        AppState.appendLog("[MobileHost] Iniciando: ${cmd.joinToString(" ")}")
-        try {
-            val pb = ProcessBuilder(cmd)
-            pb.directory(dir)
-            pb.redirectErrorStream(true)
-            process = pb.start()
-            readOutput(process!!)
-        } catch (e: Exception) {
-            AppState.appendLog("[MobileHost] Erro ao iniciar processo: ${e.message}")
-            AppState.appendLog("[MobileHost] O runtime (node/python3/java) precisa estar instalado no aparelho " +
-                "e acessível no PATH do app (ex.: via Termux).")
+        AppState.appendLog("[MobileHost] Enviando para o Termux: ${cmd.joinToString(" ")}")
+        TermuxExecutor.start(this, dir, cmd)
+        startPolling(dir)
+    }
+
+    private fun startPolling(dir: File) {
+        stopPolling()
+        logPos = 0L
+        polling = true
+        pollThread = Thread {
+            while (polling) {
+                try {
+                    val (text, newPos) = TermuxExecutor.readNewLines(dir, logPos)
+                    logPos = newPos
+                    if (text.isNotEmpty()) AppState.appendLog(text.trimEnd('\n'))
+                } catch (e: Exception) {
+                    // arquivo de log ainda não existe ou está sendo escrito; ignora e tenta de novo
+                }
+                Thread.sleep(1500)
+            }
         }
+        pollThread?.start()
+    }
+
+    private fun stopPolling() {
+        polling = false
+        pollThread = null
     }
 
     private fun nodeEntry(dir: File): String {
@@ -122,20 +153,6 @@ class HostService : Service() {
     private fun scriptEntry(dir: File, vararg candidates: String): String {
         for (c in candidates) if (File(dir, c).exists()) return c
         return candidates.first()
-    }
-
-    private fun readOutput(p: Process) {
-        Thread {
-            try {
-                val reader = BufferedReader(InputStreamReader(p.inputStream))
-                var line: String?
-                while (reader.readLine().also { line = it } != null) {
-                    AppState.appendLog(line ?: "")
-                }
-            } catch (e: Exception) {
-                // processo encerrado
-            }
-        }.start()
     }
 
     private fun handleApi(path: String): String {
@@ -171,6 +188,7 @@ class HostService : Service() {
 
     override fun onDestroy() {
         stopProcessOnly()
+        stopPolling()
         httpServer?.stop()
         super.onDestroy()
     }

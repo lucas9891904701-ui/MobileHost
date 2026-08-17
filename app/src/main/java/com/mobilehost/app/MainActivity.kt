@@ -5,8 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.widget.Button
 import android.widget.ProgressBar
 import android.widget.TextView
@@ -69,6 +71,10 @@ class MainActivity : AppCompatActivity() {
 
         if (Build.VERSION.SDK_INT >= 33) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        }
+        requestStorageAccessIfNeeded()
+        if (!TermuxExecutor.hasRunCommandPermission(this)) {
+            ActivityCompat.requestPermissions(this, arrayOf("com.termux.permission.RUN_COMMAND"), 3)
         }
 
         AppState.isOnline.observe(this) { online ->
@@ -154,10 +160,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun requestStorageAccessIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            if (!Environment.isExternalStorageManager()) {
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName"))
+                startActivity(intent)
+            }
+        } else {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 2)
+        }
+    }
+
     private fun startHost() {
         if ((AppState.projectType.value ?: ProjectType.NONE) == ProjectType.NONE) {
             Toast.makeText(this, "Envie um ZIP primeiro.", Toast.LENGTH_SHORT).show()
             return
+        }
+        if (!TermuxExecutor.isTermuxInstalled(this)) {
+            Toast.makeText(this, "Termux não encontrado. Instale o Termux para executar hosts.", Toast.LENGTH_LONG).show()
+        } else if (!TermuxExecutor.hasRunCommandPermission(this)) {
+            Toast.makeText(this, "Permissão RUN_COMMAND do Termux não concedida.", Toast.LENGTH_LONG).show()
         }
         val intent = Intent(this, HostService::class.java).setAction(HostService.ACTION_START)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
