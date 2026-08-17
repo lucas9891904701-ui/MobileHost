@@ -114,7 +114,10 @@ object TerminalEngine {
     fun lastJob(): TerminalJob? = synchronized(jobs) { jobs.values.lastOrNull() }
 
     /**
-     * Executa "python3 arquivo.py [args...]" em uma thread separada,
+     *     fun lastJob(): TerminalJob? = synchronized(jobs) { jobs.values.lastOrNull() }
+
+    // Executa um script Python em uma thread separada.
+    fun runPython(,
      * chamando onOutput() em tempo real para cada trecho de saída e
      * onFinished() quando o script termina (com sucesso, erro ou parada).
      */
