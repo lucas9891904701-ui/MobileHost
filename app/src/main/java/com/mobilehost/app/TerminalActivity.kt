@@ -13,8 +13,7 @@ import java.util.Locale
 
 /**
  * Terminal interno leve do MobileHost (visual estilo Termux), mas sem
- * nenhuma dependência do app Termux nem da permissão
- * com.termux.permission.RUN_COMMAND. "ls"/"cd"/"pwd"/"clear" são resolvidos
+ * nenhuma dependência do app Termux. "ls"/"cd"/"pwd"/"clear" são resolvidos
  * localmente; "python3 arquivo.py" roda no interpretador Python embutido
  * (ver TerminalEngine). Antes de rodar qualquer script ou parar um
  * processo, o terminal pede confirmação ("permitir"/"negar").

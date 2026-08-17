@@ -28,11 +28,10 @@ class HostService : Service() {
 
     private var httpServer: LocalHttpServer? = null
 
-    // Polling do console: como o comando roda dentro do Termux (outro app),
-    // lemos periodicamente o arquivo de log que ele vai preenchendo.
-    private var pollThread: Thread? = null
-    @Volatile private var polling = false
-    private var logPos = 0L
+    // Id do job em execução no TerminalEngine (Python interno via Chaquopy).
+    // A saída chega em tempo real pelo callback onOutput, sem precisar de
+    // polling de arquivo de log.
+    private var currentJobId: Int? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -75,89 +74,40 @@ class HostService : Service() {
     }
 
     private fun stopProcessOnly() {
-        val pathStr = AppState.projectPath.value
-        if (pathStr != null && TermuxExecutor.isReady(this)) {
-            val sent = TermuxExecutor.stop(this, File(pathStr))
-            if (sent) {
-                AppState.appendLog("[MobileHost] Comando de parada enviado ao Termux.")
-            } else {
-                AppState.appendLog("[MobileHost] ❌ Não foi possível enviar o comando de parada: " +
-                    "permissão RUN_COMMAND do Termux não concedida.")
+        val jobId = currentJobId
+        if (jobId != null) {
+            val job = TerminalEngine.stopJob(jobId)
+            if (job != null) {
+                AppState.appendLog("[MobileHost] Pedido de parada enviado ao processo Python interno (pid $jobId).")
             }
+            currentJobId = null
         }
-        stopPolling()
     }
 
     private fun startProcess() {
         val pathStr = AppState.projectPath.value ?: return
         val dir = File(pathStr)
 
-        if (!TermuxExecutor.isTermuxInstalled(this)) {
-            AppState.appendLog("[MobileHost] ❌ Termux não está instalado. Instale o Termux (F-Droid) para executar hosts.")
-            return
-        }
-        if (!TermuxExecutor.hasRunCommandPermission(this)) {
-            AppState.appendLog("[MobileHost] ❌ Permissão com.termux.permission.RUN_COMMAND não concedida ao MobileHost. " +
-                "Volte à tela inicial e toque em Iniciar para que o app solicite a permissão do Termux.")
-            return
-        }
-
         val type = AppState.projectType.value ?: ProjectType.UNKNOWN
-        val cmd: List<String> = when (type) {
-            ProjectType.NODE -> listOf("node", nodeEntry(dir))
-            ProjectType.PYTHON -> listOf("python3", scriptEntry(dir, "main.py", "app.py"))
-            ProjectType.JAR -> {
-                val jarName = dir.listFiles { f -> f.name.endsWith(".jar") }?.firstOrNull()?.name ?: "server.jar"
-                listOf("java", "-jar", jarName, "nogui")
-            }
-            else -> {
-                AppState.appendLog("[MobileHost] Nenhum projeto reconhecido para executar.")
-                return
-            }
-        }
-
-        AppState.appendLog("[MobileHost] Enviando para o Termux: ${cmd.joinToString(" ")}")
-        val sent = TermuxExecutor.start(this, dir, cmd)
-        if (!sent) {
-            AppState.appendLog("[MobileHost] ❌ O Termux recusou o comando: permissão RUN_COMMAND " +
-                "não concedida ao MobileHost. Abra o app e conceda a permissão quando solicitado.")
+        if (type != ProjectType.PYTHON) {
+            AppState.appendLog("[MobileHost] ❌ Este tipo de projeto (${type.name}) não é suportado pelo runtime " +
+                "interno, que executa somente Python.")
             return
         }
-        startPolling(dir)
-    }
+        val script = scriptEntry(dir, "main.py", "app.py")
+        val scriptFile = File(dir, script)
 
-    private fun startPolling(dir: File) {
-        stopPolling()
-        logPos = 0L
-        polling = true
-        pollThread = Thread {
-            while (polling) {
-                try {
-                    val (text, newPos) = TermuxExecutor.readNewLines(dir, logPos)
-                    logPos = newPos
-                    if (text.isNotEmpty()) AppState.appendLog(text.trimEnd('\n'))
-                } catch (e: Exception) {
-                    // arquivo de log ainda não existe ou está sendo escrito; ignora e tenta de novo
-                }
-                Thread.sleep(1500)
+        AppState.appendLog("[MobileHost] Executando com o Python interno: python3 $script")
+        val job = TerminalEngine.runPython(
+            context = this,
+            scriptPath = scriptFile.absolutePath,
+            args = emptyList(),
+            onOutput = { text -> AppState.appendLog(text.trimEnd('\n')) },
+            onFinished = { finished ->
+                AppState.appendLog("[MobileHost] Processo finalizado (status: ${finished.status}, ${finished.exitMessage})")
             }
-        }
-        pollThread?.start()
-    }
-
-    private fun stopPolling() {
-        polling = false
-        pollThread = null
-    }
-
-    private fun nodeEntry(dir: File): String {
-        val pkg = File(dir, "package.json")
-        if (pkg.exists()) {
-            val text = pkg.readText()
-            val match = Regex("\"main\"\\s*:\\s*\"([^\"]+)\"").find(text)
-            if (match != null) return match.groupValues[1]
-        }
-        return "index.js"
+        )
+        currentJobId = job.id
     }
 
     private fun scriptEntry(dir: File, vararg candidates: String): String {
@@ -198,7 +148,6 @@ class HostService : Service() {
 
     override fun onDestroy() {
         stopProcessOnly()
-        stopPolling()
         httpServer?.stop()
         super.onDestroy()
     }
