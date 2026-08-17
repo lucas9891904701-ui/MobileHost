@@ -28,6 +28,10 @@ object TermuxExecutor {
     private const val RUN_COMMAND_SERVICE = "com.termux.app.RunCommandService"
     private const val BASH = "/data/data/com.termux/files/usr/bin/bash"
 
+    /** Nome da permissão exigida pelo Termux, exposto como constante para
+     *  evitar strings soltas/duplicadas em outras classes (MainActivity). */
+    const val RUN_COMMAND_PERMISSION = "com.termux.permission.RUN_COMMAND"
+
     fun isTermuxInstalled(context: Context): Boolean {
         return try {
             context.packageManager.getPackageInfo(TERMUX_PKG, 0)
@@ -38,7 +42,7 @@ object TermuxExecutor {
     }
 
     fun hasRunCommandPermission(context: Context): Boolean {
-        return context.checkSelfPermission("com.termux.permission.RUN_COMMAND") ==
+        return context.checkSelfPermission(RUN_COMMAND_PERMISSION) ==
             PackageManager.PERMISSION_GRANTED
     }
 
@@ -49,8 +53,15 @@ object TermuxExecutor {
     fun logFile(dir: File): File = File(dir, ".mobilehost_console.log")
     private fun pidFile(dir: File): File = File(dir, ".mobilehost.pid")
 
-    /** Pede ao Termux para iniciar o comando, com saída redirecionada para o log. */
-    fun start(context: Context, dir: File, command: List<String>) {
+    /**
+     * Pede ao Termux para iniciar o comando, com saída redirecionada para o log.
+     * Retorna false (sem lançar exceção) se a permissão RUN_COMMAND não estiver
+     * concedida ou se o Android recusar o envio do Intent por falta dela — o que
+     * pode acontecer mesmo após a checagem prévia, já que a permissão pode ser
+     * revogada pelo usuário/sistema entre a checagem e o envio do comando.
+     */
+    fun start(context: Context, dir: File, command: List<String>): Boolean {
+        if (!hasRunCommandPermission(context)) return false
         val log = logFile(dir)
         val pid = pidFile(dir)
         log.delete()
@@ -59,28 +70,37 @@ object TermuxExecutor {
         // o que permite matar o processo certo depois usando o pidfile.
         val script = "cd '${dir.absolutePath}'; echo \$\$ > '${pid.absolutePath}'; " +
             "exec $cmdLine >> '${log.absolutePath}' 2>&1"
-        runInTermux(context, BASH, arrayOf("-c", script), dir.absolutePath)
+        return runInTermux(context, BASH, arrayOf("-c", script), dir.absolutePath)
     }
 
     /** Pede ao Termux para matar o processo salvo no pidfile. */
-    fun stop(context: Context, dir: File) {
+    fun stop(context: Context, dir: File): Boolean {
+        if (!hasRunCommandPermission(context)) return false
         val pid = pidFile(dir)
         val script = "if [ -f '${pid.absolutePath}' ]; then kill \$(cat '${pid.absolutePath}') 2>/dev/null; " +
             "rm -f '${pid.absolutePath}'; fi"
-        runInTermux(context, BASH, arrayOf("-c", script), dir.absolutePath)
+        return runInTermux(context, BASH, arrayOf("-c", script), dir.absolutePath)
     }
 
-    private fun runInTermux(context: Context, path: String, args: Array<String>, workDir: String) {
+    private fun runInTermux(context: Context, path: String, args: Array<String>, workDir: String): Boolean {
         val intent = Intent(RUN_COMMAND_ACTION)
         intent.setComponent(ComponentName(TERMUX_PKG, RUN_COMMAND_SERVICE))
         intent.putExtra("com.termux.RUN_COMMAND_PATH", path)
         intent.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", args)
         intent.putExtra("com.termux.RUN_COMMAND_WORKDIR", workDir)
         intent.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
-        if (Build.VERSION.SDK_INT >= 26) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
+        return try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+            true
+        } catch (e: SecurityException) {
+            // O próprio Termux (ou o Android) recusou o comando por falta da
+            // permissão RUN_COMMAND. Não deixamos a exceção propagar — quem
+            // chamou trata o retorno false e mostra uma mensagem clara.
+            false
         }
     }
 

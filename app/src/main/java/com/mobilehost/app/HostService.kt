@@ -77,10 +77,15 @@ class HostService : Service() {
     private fun stopProcessOnly() {
         val pathStr = AppState.projectPath.value
         if (pathStr != null && TermuxExecutor.isReady(this)) {
-            TermuxExecutor.stop(this, File(pathStr))
+            val sent = TermuxExecutor.stop(this, File(pathStr))
+            if (sent) {
+                AppState.appendLog("[MobileHost] Comando de parada enviado ao Termux.")
+            } else {
+                AppState.appendLog("[MobileHost] ❌ Não foi possível enviar o comando de parada: " +
+                    "permissão RUN_COMMAND do Termux não concedida.")
+            }
         }
         stopPolling()
-        AppState.appendLog("[MobileHost] Comando de parada enviado ao Termux.")
     }
 
     private fun startProcess() {
@@ -92,8 +97,8 @@ class HostService : Service() {
             return
         }
         if (!TermuxExecutor.hasRunCommandPermission(this)) {
-            AppState.appendLog("[MobileHost] ❌ Permissão RUN_COMMAND não concedida ao MobileHost. " +
-                "Abra o app e aceite a permissão do Termux quando solicitado.")
+            AppState.appendLog("[MobileHost] ❌ Permissão com.termux.permission.RUN_COMMAND não concedida ao MobileHost. " +
+                "Volte à tela inicial e toque em Iniciar para que o app solicite a permissão do Termux.")
             return
         }
 
@@ -112,7 +117,12 @@ class HostService : Service() {
         }
 
         AppState.appendLog("[MobileHost] Enviando para o Termux: ${cmd.joinToString(" ")}")
-        TermuxExecutor.start(this, dir, cmd)
+        val sent = TermuxExecutor.start(this, dir, cmd)
+        if (!sent) {
+            AppState.appendLog("[MobileHost] ❌ O Termux recusou o comando: permissão RUN_COMMAND " +
+                "não concedida ao MobileHost. Abra o app e conceda a permissão quando solicitado.")
+            return
+        }
         startPolling(dir)
     }
 

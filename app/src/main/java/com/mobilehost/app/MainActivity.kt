@@ -39,6 +39,12 @@ class MainActivity : AppCompatActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val scope = CoroutineScope(Dispatchers.Main)
 
+    // Quando o usuário toca em "Iniciar" sem a permissão RUN_COMMAND concedida,
+    // pedimos a permissão em tempo de execução e guardamos essa intenção aqui;
+    // se o usuário conceder, retomamos o start automaticamente.
+    private var pendingHostStart = false
+    private val REQ_RUN_COMMAND = 3
+
     private val pickZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) receiveHost(uri)
     }
@@ -73,9 +79,6 @@ class MainActivity : AppCompatActivity() {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
         requestStorageAccessIfNeeded()
-        if (!TermuxExecutor.hasRunCommandPermission(this)) {
-            ActivityCompat.requestPermissions(this, arrayOf("com.termux.permission.RUN_COMMAND"), 3)
-        }
 
         AppState.isOnline.observe(this) { online ->
             tvStatusDot.setTextColor(getColor(if (online) R.color.online else R.color.offline))
@@ -178,11 +181,53 @@ class MainActivity : AppCompatActivity() {
         }
         if (!TermuxExecutor.isTermuxInstalled(this)) {
             Toast.makeText(this, "Termux não encontrado. Instale o Termux para executar hosts.", Toast.LENGTH_LONG).show()
-        } else if (!TermuxExecutor.hasRunCommandPermission(this)) {
-            Toast.makeText(this, "Permissão RUN_COMMAND do Termux não concedida.", Toast.LENGTH_LONG).show()
+            return
         }
+        if (!TermuxExecutor.hasRunCommandPermission(this)) {
+            // Solicita a permissão em tempo de execução ANTES de tentar rodar
+            // qualquer comando. O resultado é tratado em onRequestPermissionsResult.
+            pendingHostStart = true
+            Toast.makeText(
+                this,
+                "O MobileHost precisa da permissão RUN_COMMAND do Termux para executar comandos. Conceda-a na tela seguinte.",
+                Toast.LENGTH_LONG
+            ).show()
+            ActivityCompat.requestPermissions(this, arrayOf(TermuxExecutor.RUN_COMMAND_PERMISSION), REQ_RUN_COMMAND)
+            return
+        }
+        launchHostService()
+    }
+
+    private fun launchHostService() {
         val intent = Intent(this, HostService::class.java).setAction(HostService.ACTION_START)
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_RUN_COMMAND) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            if (granted) {
+                Toast.makeText(this, "Permissão do Termux concedida.", Toast.LENGTH_SHORT).show()
+                if (pendingHostStart) {
+                    pendingHostStart = false
+                    launchHostService()
+                }
+            } else {
+                pendingHostStart = false
+                Toast.makeText(
+                    this,
+                    "Permissão com.termux.permission.RUN_COMMAND negada. Sem ela o MobileHost não consegue executar " +
+                        "comandos no Termux. Toque em Iniciar novamente para permitir, ou conceda-a manualmente em " +
+                        "Ajustes > Apps > MobileHost > Permissões.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
 
     private fun stopHost() {
