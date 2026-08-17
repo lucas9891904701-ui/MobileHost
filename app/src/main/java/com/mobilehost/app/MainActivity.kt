@@ -45,6 +45,16 @@ class MainActivity : AppCompatActivity() {
     private var pendingHostStart = false
     private val REQ_RUN_COMMAND = 3
 
+    // Marca o instante em que o diálogo de permissão foi solicitado. Como
+    // com.termux.permission.RUN_COMMAND é uma permissão custom (não pertence a
+    // nenhum grupo padrão do Android), em várias ROMs Android 13 o sistema NÃO
+    // exibe diálogo algum e devolve DENIED instantaneamente. Medimos o tempo até
+    // a resposta para diferenciar "usuário tocou em Negar" de "o SO nem mostrou
+    // a janela" e, nesse segundo caso, abrimos a tela oficial onde essa
+    // permissão pode ser concedida manualmente.
+    private var runCommandRequestedAtMillis = 0L
+    private val NO_DIALOG_THRESHOLD_MS = 500L
+
     private val pickZip = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) receiveHost(uri)
     }
@@ -187,11 +197,7 @@ class MainActivity : AppCompatActivity() {
             // Solicita a permissão em tempo de execução ANTES de tentar rodar
             // qualquer comando. O resultado é tratado em onRequestPermissionsResult.
             pendingHostStart = true
-            Toast.makeText(
-                this,
-                "O MobileHost precisa da permissão RUN_COMMAND do Termux para executar comandos. Conceda-a na tela seguinte.",
-                Toast.LENGTH_LONG
-            ).show()
+            runCommandRequestedAtMillis = System.currentTimeMillis()
             ActivityCompat.requestPermissions(this, arrayOf(TermuxExecutor.RUN_COMMAND_PERMISSION), REQ_RUN_COMMAND)
             return
         }
@@ -203,6 +209,15 @@ class MainActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
     }
 
+    /** Abre a tela oficial de "Permissões" do MobileHost (App Info), onde o
+     *  Android lista com.termux.permission.RUN_COMMAND em "Permissões
+     *  adicionais" — mecanismo documentado pelo próprio Termux para conceder
+     *  RUN_COMMAND quando nenhum diálogo do sistema é exibido. */
+    private fun openAppPermissionSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))
+        startActivity(intent)
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
@@ -211,6 +226,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_RUN_COMMAND) {
             val granted = grantResults.isNotEmpty() && grantResults[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+            val elapsed = System.currentTimeMillis() - runCommandRequestedAtMillis
             if (granted) {
                 Toast.makeText(this, "Permissão do Termux concedida.", Toast.LENGTH_SHORT).show()
                 if (pendingHostStart) {
@@ -219,13 +235,26 @@ class MainActivity : AppCompatActivity() {
                 }
             } else {
                 pendingHostStart = false
-                Toast.makeText(
-                    this,
-                    "Permissão com.termux.permission.RUN_COMMAND negada. Sem ela o MobileHost não consegue executar " +
-                        "comandos no Termux. Toque em Iniciar novamente para permitir, ou conceda-a manualmente em " +
-                        "Ajustes > Apps > MobileHost > Permissões.",
-                    Toast.LENGTH_LONG
-                ).show()
+                if (elapsed < NO_DIALOG_THRESHOLD_MS) {
+                    // A resposta chegou rápido demais para ter sido um toque real
+                    // do usuário: o Android não exibiu diálogo para essa permissão
+                    // custom. Vamos direto para a tela oficial onde ela é concedida.
+                    Toast.makeText(
+                        this,
+                        "Seu Android não exibe diálogo para a permissão RUN_COMMAND do Termux. Abrindo Permissões do " +
+                            "MobileHost — ative \"RUN_COMMAND\" em Permissões adicionais.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                    openAppPermissionSettings()
+                } else {
+                    Toast.makeText(
+                        this,
+                        "Permissão com.termux.permission.RUN_COMMAND negada. Sem ela o MobileHost não consegue executar " +
+                            "comandos no Termux. Toque em Iniciar novamente para tentar de novo, ou conceda-a manualmente " +
+                            "em Ajustes > Apps > MobileHost > Permissões > Permissões adicionais.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         }
     }
