@@ -84,6 +84,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnFiles).setOnClickListener {
             startActivity(Intent(this, FilesActivity::class.java))
         }
+        findViewById<Button>(R.id.btnTerminal).setOnClickListener {
+            startActivity(Intent(this, TerminalActivity::class.java))
+        }
 
         if (Build.VERSION.SDK_INT >= 33) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)

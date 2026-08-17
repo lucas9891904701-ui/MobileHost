@@ -1,6 +1,10 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // Deve vir depois do plugin do Android. Empacota um CPython real
+    // (ARM64 nativo) dentro do app para o terminal interno rodar
+    // "python3 arquivo.py" sem depender do Termux.
+    id("com.chaquo.python")
 }
 
 android {
@@ -13,11 +17,17 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        ndk {
+            // Só ARM64: é o alvo pedido e evita empacotar o interpretador
+            // Python várias vezes para outras arquiteturas (APK menor).
+            abiFilters "arm64-v8a"
+        }
     }
 
     buildTypes {
         release {
-            minifyEnabled = false
+            isMinifyEnabled = false
         }
     }
 
